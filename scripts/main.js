@@ -87,13 +87,21 @@ function run() {
     });
 
 
-    chrome.runtime.onMessage.addListener(msgObj => {
-        if (msgObj.updateLanguage) {
-            console.log("Translatify: Language updated!");
-            restoreLyrics();
-            translate();
-        }
+    // Apply popup setting changes straight from storage, so they take effect
+    // even when tab messaging is unavailable (the popup writes the setting to
+    // storage before notifying, so this is the reliable path).
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local' || !changes.language) return;
+        const { oldValue, newValue } = changes.language;
+        // Skip first-install defaults (oldValue absent) and no-op writes.
+        if (newValue === undefined || oldValue === undefined) return;
+        if (oldValue === newValue) return;
+        console.log("Translatify: Language updated!");
+        restoreLyrics();
+        translate();
+    });
 
+    chrome.runtime.onMessage.addListener(msgObj => {
         if (msgObj.toggleTranslation !== undefined) {
             console.log("Translatify: Translation toggle updated via popup");
         }

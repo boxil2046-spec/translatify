@@ -142,7 +142,7 @@ function setupListening() {
         }
         // Catch-all for the lyrics view (re)opening, when untranslated lines
         // appear with no other trigger. Debounced.
-        if (!retranslatePending) {
+        if (!retranslatePending && !retranslateGuard) {
             const translateButton = document.querySelector("button[data-testid='translate-button']");
             if (translateButton?.getAttribute("aria-pressed") === "true" &&
                 document.querySelector(`${lyricLine}:not(.modifedLyricsWrapper)`)) {

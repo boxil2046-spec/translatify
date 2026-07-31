@@ -137,8 +137,12 @@ function updateProviderSettingsVisibility() {
 }
 
 function sendToSpotifyTabs(message) {
-    chrome.tabs.query({ url: "https://open.spotify.com/*" }, tabs => {
+    // Query every tab and let sendMessage fail harmlessly on non-Spotify tabs:
+    // URL-filtered queries need host permissions, which this extension doesn't
+    // have for open.spotify.com, so filtering here would drop every message.
+    chrome.tabs.query({}, tabs => {
         tabs.forEach(tab => {
+            if (tab.url && !tab.url.startsWith("https://open.spotify.com")) return;
             chrome.tabs.sendMessage(tab.id, message).catch(() => {});
         });
     });

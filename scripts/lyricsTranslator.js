@@ -45,6 +45,12 @@ function lineCacheKey(provider, text, sourceLanguage, destinationLanguage) {
 
 // Re-entrancy guard for translate(), set before any await.
 let translateInFlight = false;
+// A translate() request that arrived while a pass was running; re-runs after
+// it finishes so popup changes (e.g. target language) are always applied.
+let translateQueued = false;
+// True while a queued re-run is active; the translate-button observer skips
+// its catch-up translate so a settings-change re-run doesn't re-trigger itself.
+let retranslateGuard = false;
 
 // Last song an AI batch completed for; prevents re-translating it.
 let lastAiSong = null;
@@ -640,12 +646,29 @@ async function translate() {
     if (!isExtensionAlive()) return;
 
     // Prevent overlapping calls; the guard must be set before runTranslate's awaits.
-    if (aiBatchPending || translateInFlight) return;
+    // A request during a running pass (e.g. target-language change from the
+    // popup) is queued instead of dropped, so it still applies afterwards.
+    if (aiBatchPending || translateInFlight) {
+        translateQueued = true;
+        return;
+    }
     translateInFlight = true;
     try {
         await runTranslate();
     } finally {
         translateInFlight = false;
+        const queued = translateQueued;
+        translateQueued = false;
+        if (queued) {
+            // The finished pass may have re-translated the lyrics with the old
+            // settings — restore, then re-run with the current ones. The guard
+            // keeps the observer's catch-up translate from re-triggering this.
+            retranslateGuard = true;
+            restoreLyrics();
+            translate();
+        } else {
+            retranslateGuard = false;
+        }
     }
 }
 
