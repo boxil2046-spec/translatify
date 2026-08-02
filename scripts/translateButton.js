@@ -25,12 +25,16 @@ function setTranslateError(active) {
     if (loader) loader.classList.toggle("has-error", !!active);
 }
 
-// Toggles the rainbow-hue AI indicator class on the translate button.
-function updateTranslateButtonAIState() {
+// Applies each provider's indicator class from the registry to the translate
+// button (e.g. the rainbow-hue class while Custom AI is selected).
+function updateTranslateButtonProviderState() {
     const translateButton = document.querySelector("button[data-testid='translate-button']");
     if (!translateButton || !isExtensionAlive()) return;
     chrome.storage.local.get(['translationProvider']).then(result => {
-        translateButton.classList.toggle('translateButton--ai', result.translationProvider === 'customAI');
+        for (const [id, spec] of Object.entries(TRANSLATION_PROVIDERS)) {
+            if (!spec.buttonClass) continue;
+            translateButton.classList.toggle(spec.buttonClass, result.translationProvider === id);
+        }
     }).catch(() => {});
 }
 
@@ -45,7 +49,7 @@ function loadChecker() {
         addTranslateButton();
         enableTranslateButton();
         setupListening();
-        updateTranslateButtonAIState();
+        updateTranslateButtonProviderState();
 
         // Check if the translate button was enabled on previous session
         chrome.storage.local.get(["translateButton"]).then((result) => {
@@ -59,40 +63,98 @@ function loadChecker() {
     }
 }
 
-// Sets up all the event listeners
-function setupListening() {
-    const buttonList = document.querySelectorAll("button");
-    const translateButton = document.querySelector("button[data-testid='translate-button']");
+// Re-injects the translate button if Spotify re-rendered the control bar.
+// Idempotent — does nothing when the button is already present, so it's safe
+// to call from the observer on every mutation batch.
+function ensureTranslateButton() {
+    if (!isExtensionAlive()) return;
+    const existingButton = document.querySelector("button[data-testid='translate-button']");
+    if (existingButton) return; // still present, nothing to do
+
+    const repeatButton = document.querySelector("button[data-testid='control-button-repeat']");
     const lyricsButton = document.querySelector("button[data-testid='lyrics-button']");
-    const nowPlaying = document.querySelector("div[data-testid='now-playing-widget']");
+    if (!repeatButton || !lyricsButton) return; // bar not ready yet
 
-    buttonList.forEach((button) => {
-        button.addEventListener("click", translate);
-        button.addEventListener("click", enableTranslateButton);
-    });
-    
-    translateButton.removeEventListener("change",translate);
-    translateButton.removeEventListener("click",translate);
-    
-    // Listen for changes in the now playing widget
-    var nowPlayingObserver = new MutationObserver(function(mutationsList, nowPlayingObserver) {
-        setTimeout(translate, 100);
-        console.log('Translatify: Next music');
-    });
-    nowPlayingObserver.observe(nowPlaying, { attributes: true});
+    console.log("Translatify: Translate button missing, re-injecting (control bar re-rendered)");
+    eraseButton(); // safety: clear any stale leftover loader
+    addTranslateButton();
+    enableTranslateButton();
+    updateTranslateButtonProviderState();
 
-    // Listen for changes in the button bar
-    const rightButtonBar = lyricsButton.parentNode;
-    // Only works on the button bar
-    var rightButtonBarObserver = new MutationObserver(function(mutationsList, rightButtonBarObserver) {
-        console.log('Translatify: Button bar changed');
+    // Re-apply the enabled state from the previous session.
+    chrome.storage.local.get(["translateButton"]).then((result) => {
+        if (result.translateButton) {
+            toggleTranslateButton();
+        }
+    }).catch(() => {});
+}
+
+// The single, stable observer, rooted on #main-view (never torn down by
+// Spotify), so it never goes stale.
+let listeningObserver = null;
+
+// Last now-playing track key; re-translate only when the song actually changes.
+let lastNowPlayingKey = '';
+
+// Debounce for the untranslated-lyrics catch-up pass scheduled by the observer.
+let retranslatePending = false;
+
+// Idempotent if called repeatedly. Holds one observer reference.
+function setupListening() {
+    if (listeningObserver) return; // already observing — nothing to do
+
+    // Anchor that survives every Spotify re-render, so the observer never needs
+    // re-attaching.
+    const anchor = document.querySelector("#main-view") || document.querySelector("#main");
+    if (!anchor) {
+        // #main-view/#main not present yet — poll until the app shell mounts.
+        return setTimeout(setupListening, 300);
+    }
+
+    // Delegated click handler on the stable anchor. Reacts only to clicks that
+    // land on a button, so other interactions don't fire translate().
+    anchor.addEventListener('click', (event) => {
+        if (event.target.closest("button")) {
+            enableTranslateButton();
+            translate();
+        }
+    });
+
+    // Detect a song change via the track title link, so the key only changes
+    // when the song does.
+    const songChanged = () => {
+        const { songTitle, artistName } = getSongInfo();
+        // Require a valid track title; getSongInfo() can momentarily return
+        // empty strings during a track transition.
+        if (!songTitle) return false;
+        const key = `${songTitle}|${artistName}`;
+        if (key === lastNowPlayingKey) return false;
+        lastNowPlayingKey = key;
+        return true;
+    };
+
+    // One observer over the whole subtree, childList only (attributes would
+    // flood the callback with highlight/progress churn).
+    const observer = new MutationObserver(() => {
+        ensureTranslateButton();            // re-inject only if missing (idempotent)
+        if (songChanged()) {
+            setTimeout(translate, 100);     // new song → re-translate lyrics
+        }
+        // Catch-all for the lyrics view (re)opening, when untranslated lines
+        // appear with no other trigger. Debounced.
+        if (!retranslatePending && !retranslateGuard) {
+            const translateButton = document.querySelector("button[data-testid='translate-button']");
+            if (translateButton?.getAttribute("aria-pressed") === "true" &&
+                document.querySelector(`${lyricLine}:not(.modifedLyricsWrapper)`)) {
+                retranslatePending = true;
+                setTimeout(() => { retranslatePending = false; translate(); }, 100);
+            }
+        }
         setTimeout(enableTranslateButton, 0);
-        translate();
-        
     });
-    rightButtonBarObserver.observe(rightButtonBar, { subtree: true, childList: true});
-
-
+    observer.observe(anchor, { subtree: true, childList: true });
+    listeningObserver = observer;
+    console.log('Translatify: listening on stable anchor', anchor);
 }
 
 // Translates the lyrics
@@ -137,9 +199,8 @@ function addTranslateButton() {
     translateButton.setAttribute("aria-pressed", "false");
     translateButton.removeAttribute("aria-checked");
     translateButton.setAttribute("role", "button");
-    // Keep all Encore design-system classes from the clone so Spotify's own CSS
-    // handles sizing, padding, and hover states. Only add our marker class and
-    // ensure the button starts in the inactive (subdued) colour state.
+    // Keep the clone's Encore classes so Spotify's CSS styles the button; add
+    // our marker class and start it in the subdued state.
     translateButton.classList.add("translateButton");
     translateButton.classList.remove("encore-internal-color-text-brightAccent");
     if (!translateButton.classList.contains("encore-internal-color-text-subdued")) {
@@ -174,6 +235,6 @@ chrome.runtime.onMessage.addListener(msgObj => {
         }
     }
     if (msgObj.updateTranslationProvider !== undefined || msgObj.updateAiSettings !== undefined) {
-        updateTranslateButtonAIState();
+        updateTranslateButtonProviderState();
     }
 });

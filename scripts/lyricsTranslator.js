@@ -1,5 +1,4 @@
-// True while the extension's runtime bridge is still attached to this content script.
-// Becomes false after the extension is reloaded/updated, leaving this script orphaned.
+// False after the extension is reloaded/updated and this content script is orphaned.
 function isExtensionAlive() {
     try {
         return Boolean(chrome.runtime && chrome.runtime.id);
@@ -14,33 +13,46 @@ const translationCache = new Map();
 // AI batch translation cache
 const aiBatchCache = new Map();
 
-// In-flight TRANSLATE requests, keyed by cacheKey, so concurrent identical
-// requests (e.g. repeated chorus lines) collapse into a single network call
-// instead of each missing the not-yet-populated cache and firing their own.
+// In-flight TRANSLATE requests keyed by cacheKey, so concurrent identical
+// requests (e.g. repeated chorus lines) share one network call.
 const inFlightTranslations = new Map();
 
 // Active mutation observers
 const mutationObservers = new Map();
 
+// DLX batch fallback: observer cache-misses queued here, batch-translated
+// after a short debounce.
+const dlxPendingMisses = [];
+let dlxDebounceTimer = null;
+// True while a DLX request is in flight; keeps the observer from firing another
+// batch (or per-line requests) until it finishes.
+let dlxBatchInFlight = false;
+
 // To modify if spotify decides to change variable names
 const lyricLine = "div[data-testid='lyrics-line']";
 
-// True while an AI batch translation is in flight. Used as a re-entrancy guard in
-// translate() so overlapping UI events don't kick off a second pass during the wait.
-// Lines that appear mid-wait are intentionally Google-translated for responsiveness
-// and replaced with the AI result once the batch resolves.
+// True while an AI batch translation is in flight; re-entrancy guard for translate().
 let aiBatchPending = false;
 
-// When true (default), AI mode shows Google translations immediately while the AI
-// batch loads. When false, lyrics stay untranslated until the AI result arrives and
-// the MutationObserver does not Google-translate lines that appear during the wait.
+// When true (default), AI mode shows Google translations while the AI batch loads.
 let aiFailoverEnabled = true;
+
+// Provider-namespaced cache key (google, dlx, customAI) so each provider's
+// cached results stay separate.
+function lineCacheKey(provider, text, sourceLanguage, destinationLanguage) {
+    return `${provider}|${text}|${sourceLanguage}|${destinationLanguage}`;
+}
 
 // Re-entrancy guard for translate(), set before any await.
 let translateInFlight = false;
+// A translate() request that arrived while a pass was running; re-runs after
+// it finishes so popup changes (e.g. target language) are always applied.
+let translateQueued = false;
+// True while a queued re-run is active; the translate-button observer skips
+// its catch-up translate so a settings-change re-run doesn't re-trigger itself.
+let retranslateGuard = false;
 
-// Tracks the last song for which an AI batch completed successfully.
-// Prevents re-triggering AI translation for the same song.
+// Last song an AI batch completed for; prevents re-translating it.
 let lastAiSong = null;
 
 function getMainView() {
@@ -81,10 +93,10 @@ function isUntranslatable(text) {
     return !text || !/\p{L}|\p{N}/u.test(text);
 }
 
-async function translateText(text, sourceLanguage, destinationLanguage) {
+async function translateText(provider, text, sourceLanguage, destinationLanguage) {
     if (isUntranslatable(text)) return text;
 
-    const cacheKey = `${text}|${sourceLanguage}|${destinationLanguage}`;
+    const cacheKey = lineCacheKey(provider, text, sourceLanguage, destinationLanguage);
     if (translationCache.has(cacheKey)) {
         return translationCache.get(cacheKey);
     }
@@ -101,7 +113,8 @@ async function translateText(text, sourceLanguage, destinationLanguage) {
         try {
             response = await chrome.runtime.sendMessage({
                 type: 'TRANSLATE',
-                text,
+                provider,
+                lines: [text],
                 sourceLanguage,
                 destinationLanguage
             });
@@ -109,13 +122,15 @@ async function translateText(text, sourceLanguage, destinationLanguage) {
             return null;
         }
 
-        if (!response || response.error) {
+        if (!response || response.error || !Array.isArray(response.translations)) {
             if (response?.error) console.error('Error:', response.error);
             return null;
         }
 
-        translationCache.set(cacheKey, response.result);
-        return response.result;
+        const result = response.translations[0];
+        if (result == null) return null;
+        translationCache.set(cacheKey, result);
+        return result;
     })();
 
     inFlightTranslations.set(cacheKey, requestPromise);
@@ -138,15 +153,6 @@ function getSongInfo() {
     };
 }
 
-async function translateLineByLine(lines, sourceLanguage, destinationLanguage) {
-    const results = [];
-    for (const text of lines) {
-        const translated = await translateText(text, sourceLanguage, destinationLanguage);
-        results.push(translated != null ? translated : text);
-    }
-    return results;
-}
-
 async function translateBatchWithAI(lines, sourceLanguage, destinationLanguage) {
     const { songTitle, artistName } = getSongInfo();
     const cacheKey = `${lines.join('|')}|${destinationLanguage}|${songTitle}`;
@@ -159,7 +165,8 @@ async function translateBatchWithAI(lines, sourceLanguage, destinationLanguage) 
     let response;
     try {
         response = await chrome.runtime.sendMessage({
-            type: 'TRANSLATE_BATCH',
+            type: 'TRANSLATE',
+            provider: 'customAI',
             lines,
             songTitle,
             artistName,
@@ -180,9 +187,8 @@ async function translateBatchWithAI(lines, sourceLanguage, destinationLanguage) 
     return translations;
 }
 
-// Clear cached translations, then restore and re-translate so fresh results are
-// fetched. scope 'all' wipes every cache; scope 'song' clears only the entries for
-// the currently-playing song.
+// Clear cached translations, then restore and re-translate. scope 'all' wipes
+// every cache; scope 'song' clears only the current song's entries.
 function clearTranslationCache(scope) {
     if (scope === 'all') {
         translationCache.clear();
@@ -194,8 +200,12 @@ function clearTranslationCache(scope) {
             const original = wrapper.querySelector('.originalLyrics');
             const text = original ? original.innerText : (wrapper.firstChild?.textContent || '');
             if (!text) return;
+            // Keys are provider-prefixed (see lineCacheKey) — clear the line for
+            // every registered provider.
             for (const key of translationCache.keys()) {
-                if (key.startsWith(`${text}|`)) translationCache.delete(key);
+                if (Object.keys(TRANSLATION_PROVIDERS).some(id => key.startsWith(`${id}|${text}|`))) {
+                    translationCache.delete(key);
+                }
             }
         });
         // Drop AI batch entries for the current song (key ends with |<songTitle>).
@@ -217,6 +227,10 @@ function disconnectAllObservers() {
         console.log('Disconnected observer for:', key);
     });
     mutationObservers.clear();
+    // Clear pending DLX batch state.
+    if (dlxDebounceTimer) { clearTimeout(dlxDebounceTimer); dlxDebounceTimer = null; }
+    dlxPendingMisses.length = 0;
+    dlxBatchInFlight = false;
 }
 
 function restoreLyrics() {
@@ -247,8 +261,71 @@ function restoreLyrics() {
 }
 
 
-// This mess is due to Spotify's dynamic lyric highlighting behavior
-async function setupMutationObserver() {
+// Batch-translate queued DLX cache-miss lines after a short debounce (one
+// request, not one per line). On failure, show the error marker and stop.
+function scheduleDlxBatch() {
+    if (dlxDebounceTimer) clearTimeout(dlxDebounceTimer);
+    dlxDebounceTimer = setTimeout(runDlxObserverBatch, 200);
+}
+
+async function runDlxObserverBatch() {
+    // One DLX request at a time: while a batch is in flight, leave the misses
+    // queued — the running batch flushes them when it finishes.
+    if (dlxBatchInFlight) return;
+
+    const pending = dlxPendingMisses.splice(0);
+    console.log('Translatify: DLX observer batch executing for', pending.length, 'lines');
+    if (pending.length === 0 || !isExtensionAlive()) return;
+
+    const sourceLanguage = pending[0].sourceLanguage;
+    const destinationLanguage = pending[0].destinationLanguage;
+    const uniqueLines = [...new Set(pending.map(p => p.lyricsText))];
+
+    let response;
+    dlxBatchInFlight = true;
+    try {
+        response = await chrome.runtime.sendMessage({
+            type: 'TRANSLATE',
+            provider: 'dlx',
+            lines: uniqueLines,
+            sourceLanguage,
+            destinationLanguage
+        });
+    } catch {
+        return; // extension context gone
+    } finally {
+        dlxBatchInFlight = false;
+    }
+
+    // On failure, show the error marker and leave the lines untranslated
+    // (no per-line fan-out).
+    if (!response || response.error || !Array.isArray(response.translations)) {
+        if (response?.error) console.error('Translatify: DLX observer batch failed:', response.error);
+        setTranslateError(true);
+        return;
+    }
+
+    uniqueLines.forEach((text, i) => {
+        if (response.translations[i] != null) {
+            translationCache.set(lineCacheKey('dlx', text, sourceLanguage, destinationLanguage), response.translations[i]);
+        }
+    });
+
+    pending.forEach(({ wrapper, lyricsText }) => {
+        if (wrapper.classList.contains("modifedLyricsWrapper")) return;
+        const translated = translationCache.get(lineCacheKey('dlx', lyricsText, sourceLanguage, destinationLanguage));
+        if (translated != null) replaceLyric(translated, wrapper);
+    });
+
+    // Flush misses that queued while this batch was in flight.
+    if (dlxPendingMisses.length > 0) scheduleDlxBatch();
+}
+
+async function setupMutationObserver(provider, mode, readProviders) {
+    // Cache namespaces the observer reads, highest priority first (defaults to
+    // the provider's own; the AI flow passes ['customAI', 'google']).
+    const readNamespaces = readProviders || [provider];
+
     // Use a single observer that watches the main view for any changes
     const observerKey = `mainView`;
 
@@ -272,24 +349,51 @@ async function setupMutationObserver() {
         const translateButton = document.querySelector("button[data-testid='translate-button']");
         if (!translateButton || translateButton.getAttribute("aria-pressed") !== "true") return;
 
+        const processWrapper = (wrapper) => {
+            if (wrapper.classList.contains("modifedLyricsWrapper")) return;
+
+            const lyricsText = wrapper.firstChild?.textContent;
+            if (!lyricsText) return;
+
+            // Render from cache, checking read namespaces in priority order.
+            for (const ns of readNamespaces) {
+                const key = lineCacheKey(ns, lyricsText, sourceLanguage, destinationLanguage);
+                if (translationCache.has(key)) {
+                    replaceLyric(translationCache.get(key), wrapper);
+                    focusActiveLyric();
+                    return;
+                }
+            }
+
+            if (provider === 'dlx') {
+                // Untranslatable lines (♪, pure punctuation) are marked as
+                // themselves; only real text needs a DLX request.
+                if (isUntranslatable(lyricsText)) {
+                    replaceLyric(lyricsText, wrapper);
+                } else if (mode === 'batch') {
+                    // Queue for one debounced batch request per burst of new lines.
+                    dlxPendingMisses.push({ wrapper, lyricsText, sourceLanguage, destinationLanguage });
+                    scheduleDlxBatch();
+                } else {
+                    // Per-line mode: honor the user's choice for late lines too.
+                    translateAndUpdateAsync('dlx', wrapper, lyricsText, sourceLanguage, destinationLanguage);
+                }
+            } else if (!(aiBatchPending && !aiFailoverEnabled)) {
+                translateAndUpdateAsync(provider, wrapper, lyricsText, sourceLanguage, destinationLanguage);
+            }
+            focusActiveLyric();
+        };
+
         for (const mutation of mutations) {
             for (const node of mutation.addedNodes) {
                 if (node.nodeType !== Node.ELEMENT_NODE) continue;
-                if (!node.matches?.(lyricLine)) continue;
-                if (node.classList.contains("modifedLyricsWrapper")) continue;
-
-                const lyricsText = node.firstChild?.textContent;
-                if (!lyricsText) continue;
-
-                const cacheKey = `${lyricsText}|${sourceLanguage}|${destinationLanguage}`;
-                if (translationCache.has(cacheKey)) {
-                    replaceLyric(translationCache.get(cacheKey), node);
-                } else if (!(aiBatchPending && !aiFailoverEnabled)) {
-                    // Skip Google fallback for new lines while an AI batch is in flight
-                    // and failover is disabled — the AI result will translate them.
-                    translateAndUpdateAsync(node, lyricsText, sourceLanguage, destinationLanguage);
+                if (node.matches?.(lyricLine)) {
+                    processWrapper(node);
+                } else {
+                    // A full lyrics-page mount adds one container node with the
+                    // lyric lines as descendants — translate those too.
+                    node.querySelectorAll?.(lyricLine).forEach(processWrapper);
                 }
-                focusActiveLyric();
             }
         }
     });
@@ -328,9 +432,9 @@ function replaceLyric(translatedLine, lyricsWrapper) {
     newLyrics.classList.add("newLyrics");
 }
 
-async function translateAndUpdateAsync(lyricsWrapper, lyricsText, sourceLanguage, destinationLanguage) {
+async function translateAndUpdateAsync(provider, lyricsWrapper, lyricsText, sourceLanguage, destinationLanguage) {
     try {
-        const translatedLine = await translateText(lyricsText, sourceLanguage, destinationLanguage);
+        const translatedLine = await translateText(provider, lyricsText, sourceLanguage, destinationLanguage);
         if (translatedLine != null) {
             replaceLyric(translatedLine, lyricsWrapper);
         }
@@ -339,9 +443,9 @@ async function translateAndUpdateAsync(lyricsWrapper, lyricsText, sourceLanguage
     }
 }
 
-// Translate every visible lyric line, then attach the mutation observer to
-// translate any new lines Spotify renders later.
-async function translateLineByLineWithGoogle(sourceLanguage, destinationLanguage) {
+// Translate every visible lyric line with the given provider, then attach the
+// mutation observer to translate any new lines Spotify renders later.
+async function translatePerLine(provider, sourceLanguage, destinationLanguage) {
     const lyricsWrapperList = document.querySelectorAll(lyricLine);
 
     if (lyricsWrapperList.length === 0) {
@@ -352,13 +456,81 @@ async function translateLineByLineWithGoogle(sourceLanguage, destinationLanguage
     const promises = Array.from(lyricsWrapperList).map(async (wrapper) => {
         const lyrics = wrapper.firstChild?.textContent;
         if (!lyrics) return;
-        const translatedLine = await translateText(lyrics, sourceLanguage, destinationLanguage);
+        const translatedLine = await translateText(provider, lyrics, sourceLanguage, destinationLanguage);
         if (translatedLine != null) replaceLyric(translatedLine, wrapper);
     });
     await Promise.all(promises);
 
     focusActiveLyric();
-    setupMutationObserver();
+    // Keep the observer in per-line mode for late lines.
+    setupMutationObserver(provider, 'perline');
+}
+
+// Translate the whole lyric sheet in one DLX request (DLX preserves newlines),
+// then render every wrapper from the cache. On batch failure, signal
+// runTranslate — no per-line fan-out.
+async function translateBatchWithDlx(sourceLanguage, destinationLanguage) {
+    const lyricsWrapperList = document.querySelectorAll(lyricLine);
+
+    if (lyricsWrapperList.length === 0) {
+        console.log("Translatify: lyrics not found, retrying..");
+        return setTimeout(translate, 100);
+    }
+
+    // Unique lines that actually need a request: translatable and not cached.
+    const uncached = [...new Set(
+        Array.from(lyricsWrapperList)
+            .map(w => w.firstChild?.textContent)
+            .filter(text => text && !isUntranslatable(text) &&
+                !translationCache.has(lineCacheKey('dlx', text, sourceLanguage, destinationLanguage)))
+    )];
+
+    if (uncached.length > 0) {
+        if (!isExtensionAlive()) return;
+        let response;
+        dlxBatchInFlight = true;
+        try {
+            response = await chrome.runtime.sendMessage({
+                type: 'TRANSLATE',
+                provider: 'dlx',
+                lines: uncached,
+                sourceLanguage,
+                destinationLanguage
+            });
+        } catch {
+            response = null;
+        } finally {
+            dlxBatchInFlight = false;
+        }
+
+        if (!response || response.error || !Array.isArray(response.translations)) {
+            if (response?.error) console.error('Translatify: DLX batch failed:', response.error);
+            return false;   // signal failure to runTranslate; no per-line fan-out, no retry
+        }
+
+        uncached.forEach((text, i) => {
+            if (response.translations[i] != null) {
+                translationCache.set(lineCacheKey('dlx', text, sourceLanguage, destinationLanguage), response.translations[i]);
+            }
+        });
+    }
+
+    // Render every visible wrapper from the cache (re-query — the DOM may have
+    // changed). Untranslatable lines are marked as themselves.
+    document.querySelectorAll(lyricLine).forEach(wrapper => {
+        if (wrapper.classList.contains("modifedLyricsWrapper")) return;
+        const text = wrapper.firstChild?.textContent;
+        if (!text) return;
+        const translated = isUntranslatable(text)
+            ? text
+            : translationCache.get(lineCacheKey('dlx', text, sourceLanguage, destinationLanguage));
+        if (translated != null) replaceLyric(translated, wrapper);
+    });
+
+    focusActiveLyric();
+    setupMutationObserver('dlx', 'batch');
+    // Flush observer misses that queued while the batch was in flight.
+    if (dlxPendingMisses.length > 0) scheduleDlxBatch();
 }
 
 // Batch translate all lyrics with AI, then render them
@@ -372,8 +544,8 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
 
     const { songTitle, artistName } = getSongInfo();
     const songId = `${songTitle}|${artistName}|${destinationLanguage}`;
-    // Only trust songId when a title resolved; otherwise different songs
-    // collapse to "||<lang>" and reuse each other's cache.
+    // Only trust songId when a title resolved (otherwise different songs
+    // collapse to "||<lang>").
     const hasSongId = songTitle !== '';
 
     // If AI already translated this song, just render visible wrappers from
@@ -383,7 +555,7 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
         currentWrappers.forEach(wrapper => {
             if (wrapper.classList.contains("modifedLyricsWrapper")) return;
             const text = wrapper.firstChild?.textContent || '';
-            const cacheKey = `${text}|${sourceLanguage}|${destinationLanguage}`;
+            const cacheKey = lineCacheKey('customAI', text, sourceLanguage, destinationLanguage);
             const cached = translationCache.get(cacheKey);
             if (cached != null) {
                 replaceLyric(cached, wrapper);
@@ -396,17 +568,14 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
     const wrappers = Array.from(lyricsWrapperList);
     const lines = wrappers.map(w => w.firstChild?.textContent || '');
 
-    // Start the MutationObserver now so that lyrics appearing during the AI
-    // call get Google-translated immediately.  Once the AI batch completes,
-    // all visible translations are replaced with the AI results.
-    setupMutationObserver();
+    // Start the observer now so lyrics appearing during the AI call get
+    // Google-translated; it reads 'customAI' first, then 'google'.
+    setupMutationObserver('google', undefined, ['customAI', 'google']);
 
     aiBatchPending = true;
 
-    // Failover (on by default): Google-translate ALL current lyrics concurrently while
-    // the (slower) AI batch runs, so the user sees results immediately instead of
-    // staring at a blank wait. This renders progressively; the AI result overwrites it
-    // once it lands. When disabled, lyrics stay untranslated until the AI result arrives.
+    // Failover (on by default): Google-translate all lyrics while the AI batch
+    // runs; the AI result overwrites them once it lands.
     try {
         const stored = await chrome.storage.local.get(['aiFailover']);
         aiFailoverEnabled = stored.aiFailover !== undefined ? stored.aiFailover : true;
@@ -415,7 +584,7 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
     }
 
     const googlePass = aiFailoverEnabled
-        ? translateLineByLineWithGoogle(sourceLanguage, destinationLanguage)
+        ? translatePerLine('google', sourceLanguage, destinationLanguage)
             .catch(err => console.error('Translatify: Google pre-pass error:', err))
         : Promise.resolve();
 
@@ -425,12 +594,11 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
 
     if (!translations || !Array.isArray(translations)) {
         console.warn('Translatify: AI batch returned non-array, falling back to Google');
-        // With failover on, the Google pass already translated every line — just let it
-        // finish. With failover off, nothing was translated, so run Google now.
+        // Failover on: let the Google pass finish. Off: run Google now.
         if (aiFailoverEnabled) {
             await googlePass;
         } else {
-            await translateLineByLineWithGoogle(sourceLanguage, destinationLanguage);
+            await translatePerLine('google', sourceLanguage, destinationLanguage);
         }
         // Signal that the AI endpoint failed so the button can show an error marker.
         return false;
@@ -438,27 +606,24 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
 
     if (hasSongId) lastAiSong = songId;
 
-    // Let every Google response land before making the AI result authoritative, so a
-    // late Google write can't clobber the AI translation in translationCache.
+    // Let the Google pass finish before caching the AI results.
     await googlePass;
 
-    // Populate line-level cache from the AI batch so the MutationObserver picks
-    // up AI translations instead of falling back to Google.
+    // Cache the AI batch results under Custom AI's 'customAI' namespace; the
+    // fast path above and the render loop below read them back.
     for (let i = 0; i < lines.length; i++) {
         if (translations[i] != null && lines[i]) {
-            translationCache.set(`${lines[i]}|${sourceLanguage}|${destinationLanguage}`, translations[i]);
+            translationCache.set(lineCacheKey('customAI', lines[i], sourceLanguage, destinationLanguage), translations[i]);
         }
     }
 
-    // Render all currently-visible wrappers.  The DOM may have changed during
-    // the AI call (Spotify virtual scrolling), so re-query and match by text.
-    // Wrappers already translated by Google (aiBatchPending was off, so the
-    // MutationObserver ran Google fallback) get their text updated in-place
-    // with the AI result.  Unmodified wrappers get the full replaceLyric treatment.
+    // Render all visible wrappers (re-query — the DOM may have changed).
+    // Already-translated wrappers get their text updated in place; others
+    // get replaceLyric.
     const currentWrappers = Array.from(document.querySelectorAll(lyricLine));
     currentWrappers.forEach(wrapper => {
         const text = wrapper.firstChild?.textContent || '';
-        const cacheKey = `${text}|${sourceLanguage}|${destinationLanguage}`;
+        const cacheKey = lineCacheKey('customAI', text, sourceLanguage, destinationLanguage);
         const aiTranslation = translationCache.get(cacheKey);
         if (aiTranslation == null) return;
 
@@ -473,27 +638,42 @@ async function translateBatchWithAIAndRender(sourceLanguage, destinationLanguage
     });
 
     focusActiveLyric();
-    setupMutationObserver();
+    setupMutationObserver('google', undefined, ['customAI', 'google']);
 }
 
 // MAIN TRANSLATION FUNCTION
 async function translate() {
     if (!isExtensionAlive()) return;
 
-    // Prevent overlapping calls — translate() fires on many UI events, and the
-    // guard must be set before runTranslate's awaits to be effective.
-    if (aiBatchPending || translateInFlight) return;
+    // Prevent overlapping calls; the guard must be set before runTranslate's awaits.
+    // A request during a running pass (e.g. target-language change from the
+    // popup) is queued instead of dropped, so it still applies afterwards.
+    if (aiBatchPending || translateInFlight) {
+        translateQueued = true;
+        return;
+    }
     translateInFlight = true;
     try {
         await runTranslate();
     } finally {
         translateInFlight = false;
+        const queued = translateQueued;
+        translateQueued = false;
+        if (queued) {
+            // The finished pass may have re-translated the lyrics with the old
+            // settings — restore, then re-run with the current ones. The guard
+            // keeps the observer's catch-up translate from re-triggering this.
+            retranslateGuard = true;
+            restoreLyrics();
+            translate();
+        } else {
+            retranslateGuard = false;
+        }
     }
 }
 
 async function runTranslate() {
-    // Skip if all visible lyrics are already translated — prevents
-    // unnecessary re-translation when clicking unrelated UI elements.
+    // Skip if all visible lyrics are already translated.
     const visibleWrappers = document.querySelectorAll(lyricLine);
     if (visibleWrappers.length > 0) {
         const allTranslated = Array.from(visibleWrappers).every(w =>
@@ -517,23 +697,31 @@ async function runTranslate() {
 
 
     if (translateButton.getAttribute("aria-pressed") == "true" && lyricsButton.getAttribute("data-active") == "true") {
-        // Gate on provider + endpoint; the background reads the rest and falls
-        // back to Google if it isn't configured.
-        const settings = await chrome.storage.local.get(['translationProvider', 'aiEndpoint']);
-        // Show the loading indicator only while lyrics are actually being fetched/rendered.
+        // Resolve the provider from the registry: the configured one when its
+        // required settings are present, Google otherwise.
+        const settings = await chrome.storage.local.get(PROVIDER_SETTING_KEYS);
+        const resolved = resolveTranslationProvider(settings);
+        const mode = resolveTranslationMode(resolved, settings);
+        // Show the loading indicator while lyrics are fetched/rendered.
         setTranslatingIndicator(true);
-        let aiErrored = false;
+        let providerErrored = false;
         try {
-            if (settings.translationProvider === 'customAI' && settings.aiEndpoint) {
-                aiErrored = (await translateBatchWithAIAndRender(sourceLanguage, destinationLanguage)) === false;
+            if (resolved.id === 'customAI') {
+                providerErrored = (await translateBatchWithAIAndRender(sourceLanguage, destinationLanguage)) === false;
+            } else if (resolved.id === 'dlx' && mode === 'batch') {
+                providerErrored = (await translateBatchWithDlx(sourceLanguage, destinationLanguage)) === false;
             } else {
-                await translateLineByLineWithGoogle(sourceLanguage, destinationLanguage);
+                await translatePerLine(resolved.id, sourceLanguage, destinationLanguage);
             }
         } finally {
             setTranslatingIndicator(false);
         }
-        // Swap the loading dots for an error marker when the AI endpoint failed.
-        if (aiErrored) setTranslateError(true);
+        // Show the error marker when the provider's batch failed, or when a
+        // misconfigured provider fell back to Google.
+        if (resolved.fallback) {
+            console.warn(`Translatify: provider "${settings.translationProvider}" is missing required settings, used ${resolved.id} instead`);
+        }
+        if (providerErrored || resolved.fallback) setTranslateError(true);
     } else if (translateButton.getAttribute("aria-pressed") == "false") {
         setTranslateError(false);
         restoreLyrics();

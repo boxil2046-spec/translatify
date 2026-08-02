@@ -18,13 +18,17 @@ const aiTestConnection = document.getElementById('aiTestConnection');
 const aiTestStatus = document.getElementById('aiTestStatus');
 const aiThinkMode = document.getElementById('aiThinkMode');
 const aiFailover = document.getElementById('aiFailover');
+const dlxSettings = document.getElementById('dlxSettings');
+const dlxEndpoint = document.getElementById('dlxEndpoint');
+const dlxTestConnection = document.getElementById('dlxTestConnection');
+const dlxTestStatus = document.getElementById('dlxTestStatus');
+const dlxTranslationMode = document.getElementById('dlxTranslationMode');
 const clearSongCache = document.getElementById('clearSongCache');
 const clearAllCache = document.getElementById('clearAllCache');
 const clearStorage = document.getElementById('clearStorage');
 
 $(document).ready(function() {
-    // Render the dropdown inside the .optionDiv so the (nested) select2 CSS
-    // overrides apply — by default select2 appends it to <body>, out of scope.
+    // Render the dropdown inside .optionDiv so the nested select2 CSS overrides apply.
     $('#languageSelector').select2({
         dropdownParent: $('#languageSelector').parent()
     });
@@ -39,8 +43,8 @@ $(document).ready(function(){
 
  });
 
-// Default the dropdown to the browser language (Chromium + Firefox) when nothing
-// is stored yet, falling back to English. Mirrors getBrowserLanguage() in main.js.
+// Default the dropdown to the browser language when nothing is stored.
+// Mirrors getBrowserLanguage() in main.js.
 function getBrowserLanguage() {
     const candidates = [];
     if (Array.isArray(navigator.languages)) candidates.push(...navigator.languages);
@@ -94,8 +98,8 @@ chrome.storage.local.get(['translateButton'], (result) => {
     }
 });
 
-// Load AI provider settings
-chrome.storage.local.get(['translationProvider', 'aiEndpoint', 'aiApiKey', 'aiModel', 'aiThinkMode', 'aiFailover'], (result) => {
+// Load translation provider settings
+chrome.storage.local.get(['translationProvider', 'aiEndpoint', 'aiApiKey', 'aiModel', 'aiThinkMode', 'aiFailover', 'dlxEndpoint', 'dlxTranslationMode'], (result) => {
     if (result.translationProvider) {
         translationProvider.value = result.translationProvider;
     }
@@ -113,12 +117,32 @@ chrome.storage.local.get(['translationProvider', 'aiEndpoint', 'aiApiKey', 'aiMo
     }
     // Failover (instant Google translation while AI loads) is on by default.
     aiFailover.checked = result.aiFailover !== undefined ? result.aiFailover : true;
-    aiSettings.style.display = translationProvider.value === 'customAI' ? 'block' : 'none';
+    if (result.dlxEndpoint) {
+        dlxEndpoint.value = result.dlxEndpoint;
+    }
+    // Batch is the default: fewer requests, kinder to public DLX instances.
+    dlxTranslationMode.value = result.dlxTranslationMode || 'batch';
+    updateProviderSettingsVisibility();
 });
 
+// Show the settings panel for the selected provider, hide the others
+// (panels come from the registry).
+function updateProviderSettingsVisibility() {
+    const provider = translationProvider.value;
+    for (const [id, spec] of Object.entries(TRANSLATION_PROVIDERS)) {
+        if (!spec.panelId) continue;
+        const panel = document.getElementById(spec.panelId);
+        if (panel) panel.style.display = provider === id ? 'block' : 'none';
+    }
+}
+
 function sendToSpotifyTabs(message) {
-    chrome.tabs.query({ url: "https://open.spotify.com/*" }, tabs => {
+    // Query every tab and let sendMessage fail harmlessly on non-Spotify tabs:
+    // URL-filtered queries need host permissions, which this extension doesn't
+    // have for open.spotify.com, so filtering here would drop every message.
+    chrome.tabs.query({}, tabs => {
         tabs.forEach(tab => {
+            if (tab.url && !tab.url.startsWith("https://open.spotify.com")) return;
             chrome.tabs.sendMessage(tab.id, message).catch(() => {});
         });
     });
@@ -145,9 +169,62 @@ applyLanguageButton.addEventListener('click', async () => {
 
 translationProvider.addEventListener('change', async () => {
     const provider = translationProvider.value;
-    aiSettings.style.display = provider === 'customAI' ? 'block' : 'none';
+    updateProviderSettingsVisibility();
     await chrome.storage.local.set({translationProvider: provider});
     sendToSpotifyTabs({ updateTranslationProvider: provider });
+});
+
+async function saveAndPropagateDlxSettings() {
+    const endpoint = dlxEndpoint.value.trim();
+    // Dispatch the save first (the permission prompt can close the popup), then
+    // request permission before any await (user-gesture requirement).
+    chrome.storage.local.set({dlxEndpoint: endpoint}).catch(() => {});
+    const granted = !endpoint || await ensureHostPermission(endpoint);
+    if (granted) sendToSpotifyTabs({ updateDlxSettings: { endpoint } });
+}
+
+dlxEndpoint.addEventListener('change', saveAndPropagateDlxSettings);
+
+dlxTranslationMode.addEventListener('change', async () => {
+    const mode = dlxTranslationMode.value;
+    await chrome.storage.local.set({dlxTranslationMode: mode});
+    sendToSpotifyTabs({ updateDlxTranslationMode: mode });
+});
+
+// Shared status rendering for the provider "Test Connection" buttons.
+function setTestStatus(el, state, detail) {
+    if (state === 'loading') {
+        el.textContent = chrome.i18n.getMessage('aiTestInProgress') || 'Testing...';
+        el.className = 'loading';
+    } else if (state === 'success') {
+        el.textContent = chrome.i18n.getMessage('aiTestSuccess') || 'Connection successful!';
+        el.className = 'success';
+    } else {
+        el.textContent = (chrome.i18n.getMessage('aiTestFail') || 'Connection failed.') + (detail ? ` (${detail})` : '');
+        el.className = 'error';
+    }
+}
+
+dlxTestConnection.addEventListener('click', async () => {
+    const endpoint = dlxEndpoint.value.trim();
+    if (endpoint) {
+        const granted = await ensureHostPermission(endpoint);
+        if (!granted) {
+            return setTestStatus(dlxTestStatus, 'error', 'access to the endpoint was not granted');
+        }
+    }
+    setTestStatus(dlxTestStatus, 'loading');
+    try {
+        const response = await chrome.runtime.sendMessage({ type: 'TEST_PROVIDER', provider: 'dlx', endpoint });
+        if (response?.ok) {
+            setTestStatus(dlxTestStatus, 'success');
+            sendToSpotifyTabs({ updateDlxSettings: { endpoint } });
+        } else {
+            setTestStatus(dlxTestStatus, 'error', response?.error || 'unknown error');
+        }
+    } catch (e) {
+        setTestStatus(dlxTestStatus, 'error', e.message);
+    }
 });
 
 function endpointOrigin(endpoint) {
@@ -158,10 +235,8 @@ function endpointOrigin(endpoint) {
     }
 }
 
-// Request access to the endpoint's origin. It's declared as an optional
-// permission, so we ask for it at runtime from a user gesture instead of
-// requesting blanket access up front. request() resolves true without a
-// prompt if already granted.
+// Request access to the endpoint's origin (an optional permission asked for at
+// runtime). Resolves true without a prompt if already granted.
 async function ensureHostPermission(endpoint) {
     const pattern = endpointOrigin(endpoint);
     if (!pattern) return false;
@@ -176,9 +251,11 @@ async function saveAndPropagateAiSettings() {
     const endpoint = aiEndpoint.value.trim();
     const apiKey = aiApiKey.value.trim();
     const model = aiModel.value.trim();
-    if (endpoint) await ensureHostPermission(endpoint);
-    await chrome.storage.local.set({aiEndpoint: endpoint, aiApiKey: apiKey, aiModel: model});
-    sendToSpotifyTabs({ updateAiSettings: { endpoint, apiKey, model } });
+    // Dispatch the save first (the permission prompt can close the popup), then
+    // request permission before any await (user-gesture requirement).
+    chrome.storage.local.set({aiEndpoint: endpoint, aiApiKey: apiKey, aiModel: model}).catch(() => {});
+    const granted = !endpoint || await ensureHostPermission(endpoint);
+    if (granted) sendToSpotifyTabs({ updateAiSettings: { endpoint, apiKey, model } });
 }
 
 aiEndpoint.addEventListener('change', saveAndPropagateAiSettings);
@@ -244,8 +321,7 @@ clearAllCache.addEventListener('click', () => {
     confirmAction(clearAllCache, () => sendToSpotifyTabs({ clearCache: 'all' }));
 });
 
-// Debug: wipe all saved settings (chrome.storage), resetting the extension to
-// defaults, then reload the popup so the controls reflect the cleared state.
+// Debug: wipe all saved settings and reload the popup.
 clearStorage.addEventListener('click', () => {
     confirmAction(clearStorage, async () => {
         try { await chrome.storage.local.clear(); } catch {}
@@ -260,20 +336,15 @@ aiTestConnection.addEventListener('click', async () => {
     const model = aiModel.value.trim();
 
     if (!endpoint || !apiKey) {
-        aiTestStatus.textContent = chrome.i18n.getMessage('aiTestFail') || 'Connection failed. Check your settings.';
-        aiTestStatus.className = 'error';
-        return;
+        return setTestStatus(aiTestStatus, 'error');
     }
 
     const granted = await ensureHostPermission(endpoint);
     if (!granted) {
-        aiTestStatus.textContent = (chrome.i18n.getMessage('aiTestFail') || 'Connection failed.') + ' (access to the endpoint was not granted)';
-        aiTestStatus.className = 'error';
-        return;
+        return setTestStatus(aiTestStatus, 'error', 'access to the endpoint was not granted');
     }
 
-    aiTestStatus.textContent = chrome.i18n.getMessage('aiTestInProgress') || 'Testing...';
-    aiTestStatus.className = 'loading';
+    setTestStatus(aiTestStatus, 'loading');
 
     try {
         const baseUrl = endpoint.replace(/\/+$/, '');
@@ -296,24 +367,19 @@ aiTestConnection.addEventListener('click', async () => {
             try {
                 const data = await response.json();
                 if (data.choices || data.id || data.object) {
-                    aiTestStatus.textContent = chrome.i18n.getMessage('aiTestSuccess') || 'Connection successful!';
-                    aiTestStatus.className = 'success';
+                    setTestStatus(aiTestStatus, 'success');
+                    sendToSpotifyTabs({ updateAiSettings: { endpoint, apiKey, model } });
                 } else {
-                    aiTestStatus.textContent = (chrome.i18n.getMessage('aiTestFail') || 'Connection failed. Check your settings.') + ' (unexpected response format)';
-                    aiTestStatus.className = 'error';
+                    setTestStatus(aiTestStatus, 'error', 'unexpected response format');
                 }
             } catch {
-                aiTestStatus.textContent = (chrome.i18n.getMessage('aiTestFail') || 'Connection failed.') + ' (endpoint returned non-JSON — check the URL includes the full API path, e.g. /v1)';
-                aiTestStatus.className = 'error';
+                setTestStatus(aiTestStatus, 'error', 'endpoint returned non-JSON; check the URL includes the full API path, e.g. /v1');
             }
         } else {
-            const errorText = await response.text();
-            aiTestStatus.textContent = (chrome.i18n.getMessage('aiTestFail') || 'Connection failed.') + ` (${response.status})`;
-            aiTestStatus.className = 'error';
+            setTestStatus(aiTestStatus, 'error', String(response.status));
         }
     } catch (e) {
-        aiTestStatus.textContent = (chrome.i18n.getMessage('aiTestFail') || 'Connection failed.') + ` (${e.message})`;
-        aiTestStatus.className = 'error';
+        setTestStatus(aiTestStatus, 'error', e.message);
     }
 });
 

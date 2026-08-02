@@ -10,10 +10,8 @@ loadChecker();
 run();
 console.log("Translatify: Lyrics Translator is running..");
 
-// Determine the default target language from the browser's preferred languages.
-// navigator.languages / navigator.language are supported on both Chromium and
-// Firefox. The result is normalized to a code the language selector recognizes,
-// and falls back to English when nothing usable is found.
+// Default target language from the browser's preferred languages, normalized
+// to a selector code; falls back to English.
 function getBrowserLanguage() {
     const candidates = [];
     if (Array.isArray(navigator.languages)) candidates.push(...navigator.languages);
@@ -89,13 +87,21 @@ function run() {
     });
 
 
-    chrome.runtime.onMessage.addListener(msgObj => {
-        if (msgObj.updateLanguage) {
-            console.log("Translatify: Language updated!");
-            restoreLyrics();
-            translate();
-        }
+    // Apply popup setting changes straight from storage, so they take effect
+    // even when tab messaging is unavailable (the popup writes the setting to
+    // storage before notifying, so this is the reliable path).
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local' || !changes.language) return;
+        const { oldValue, newValue } = changes.language;
+        // Skip first-install defaults (oldValue absent) and no-op writes.
+        if (newValue === undefined || oldValue === undefined) return;
+        if (oldValue === newValue) return;
+        console.log("Translatify: Language updated!");
+        restoreLyrics();
+        translate();
+    });
 
+    chrome.runtime.onMessage.addListener(msgObj => {
         if (msgObj.toggleTranslation !== undefined) {
             console.log("Translatify: Translation toggle updated via popup");
         }
@@ -134,6 +140,18 @@ function run() {
 
         if (msgObj.updateAiSettings) {
             console.log("Translatify: AI settings updated");
+            restoreLyrics();
+            translate();
+        }
+
+        if (msgObj.updateDlxSettings) {
+            console.log("Translatify: DLX settings updated");
+            restoreLyrics();
+            translate();
+        }
+
+        if (msgObj.updateDlxTranslationMode) {
+            console.log("Translatify: DLX translation mode updated to", msgObj.updateDlxTranslationMode);
             restoreLyrics();
             translate();
         }
