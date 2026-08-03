@@ -39,9 +39,17 @@
         "message": "Consultez le dépôt GitHub open source !",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "Commentaires",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ Laissez un avis !",
+        "message": "Laissez un avis !",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "Ouvrir le Wiki",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "Activer la Traduction",

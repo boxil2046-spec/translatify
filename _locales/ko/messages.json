@@ -39,9 +39,17 @@
         "message": "오픈 소스 GitHub 저장소를 확인해 보세요!",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "피드백",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ 리뷰를 남겨주세요!",
+        "message": "리뷰를 남겨주세요!",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "위키 열기",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "번역 활성화",

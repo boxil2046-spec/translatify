@@ -39,9 +39,17 @@
         "message": "Lihat repositori GitHub sumber terbuka!",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "Masukan",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ Tinggalkan ulasan!",
+        "message": "Tinggalkan ulasan!",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "Buka Wiki",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "Aktifkan Terjemahan",

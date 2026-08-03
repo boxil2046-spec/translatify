@@ -39,9 +39,17 @@
         "message": "查看开源 GitHub 仓库！",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "反馈",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ 请留下您的评价！",
+        "message": "请留下您的评价！",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "打开 Wiki",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "启用翻译",

@@ -39,9 +39,17 @@
         "message": "GitHub açık kaynak deposunu incele!",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "Geri bildirim",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ Bir inceleme bırak!",
+        "message": "Bir inceleme bırak!",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "Wiki'yi aç",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "Çeviriyi Etkinleştir",

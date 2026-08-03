@@ -99,14 +99,59 @@ h4.subtitle {
     width: 100%;
 }
 
-/* Footer links */
-.options>a {
+/* Footer links — plain text links, not the pill-styled .buttonLink */
+.options>a:not(.buttonLink) {
     margin-bottom: 5px;
     text-decoration: none;
 }
 
-.options>a:hover {
+.options>a:not(.buttonLink):hover {
     text-decoration: underline;
+}
+
+/* ==========================================================================
+   Buttons — elevated grey pill. Shared by <button> inside option cards and by
+   standalone .buttonLink anchors, which sit directly in .options.
+   ========================================================================== */
+.optionDiv button,
+.buttonLink {
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 35px;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill);
+    background-color: var(--button-bg);
+    color: var(--text);
+    /* Without these, <button> falls back to the UA default (13.3px Arial)
+       while <a class="buttonLink"> inherits 16px Noto Sans. */
+    font-family: var(--font);
+    font-size: 0.85em;
+    font-weight: bold;
+    text-decoration: none;
+    transition: background-color .2s ease-out;
+    box-sizing: border-box;
+}
+
+.optionDiv button:not(:disabled):hover,
+.buttonLink:hover {
+    background-color: var(--button-bg-hover);
+}
+
+/* Sized to match the label text; color inherited via fill="currentColor". */
+.buttonLink svg {
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+}
+
+/* Standalone pill link — match the option cards' width so edges line up. */
+.options>.buttonLink {
+    width: 85%;
 }
 
 .optionDiv {
@@ -135,32 +180,6 @@ h4.subtitle {
         height: var(--control-height);
         width: 100%;
         border-radius: var(--radius);
-    }
-
-    /* Buttons — elevated grey pill */
-    button,
-    .buttonLink {
-        cursor: pointer;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        gap: 8px;
-        width: 100%;
-        min-height: 35px;
-        padding: 8px 16px;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-pill);
-        background-color: var(--button-bg);
-        color: var(--text);
-        font-weight: bold;
-        text-decoration: none;
-        transition: background-color .2s ease-out;
-        box-sizing: border-box;
-    }
-
-    button:not(:disabled):hover,
-    .buttonLink:hover {
-        background-color: var(--button-bg-hover);
     }
 
     .cacheControls {

@@ -39,9 +39,17 @@
         "message": "GitHub のオープンソースリポジトリをチェック！",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "フィードバック",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ レビューをお願いします！",
+        "message": "レビューをお願いします！",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "Wiki を開く",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "翻訳を有効にする",

@@ -40,9 +40,17 @@
         "message": "Check out the open source GitHub repo!",
         "description": "github repo"
     },
+    "feedbackTitle": {
+        "message": "Feedback",
+        "description": "Feedback section heading"
+    },
     "reviewLink": {
-        "message": "★ Please leave a review!",
+        "message": "Please leave a review!",
         "description": "Chrome Web Store review link"
+    },
+    "wikiLink": {
+        "message": "Open the Wiki",
+        "description": "Link to the project wiki"
     },
     "translateToggle": {
         "message": "Enable Translation",

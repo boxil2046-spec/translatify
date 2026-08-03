@@ -11,7 +11,7 @@
   </head>
   <body>
     <span id="appVersion" class="version-label"></span>
-    <div class="options"> 
+    <div class="options">
       <!-- LOGO OF APP-->
     <div class="header">
       <img src="../images/icon-64.png" width="64px" height="64px" alt="Logo">
@@ -33,6 +33,19 @@
       </a>
     </div>
 
+    <!-- WIKI LINK -->
+    <a class="buttonLink" href="https://github.com/Slyfti/translatify/wiki"
+      target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M0 0h24v24H0z" fill="none" />
+        <path fill="currentColor"
+          d="M13.25 7a1 1 0 1 1-2 0a1 1 0 0 1 2 0M11.5 9.75v5a.75.75 0 0 0 1.5 0v-5a.75.75 0 0 0-1.5 0M4 4.5A2.5 2.5 0 0 1 6.5 2H18a2.5 2.5 0 0 1 2.5 2.5v14.25a.75.75 0 0 1-.75.75H5.5a1 1 0 0 0 1 1h13.25a.75.75 0 0 1 0 1.5H6.5A2.5 2.5 0 0 1 4 19.5zM19 18V4.5a1 1 0 0 0-1-1H6.5a1 1 0 0 0-1 1V18z" />
+      </svg>
+      <!-- data-locale sits on the span, not the anchor: localize.js assigns
+           innerText, which would otherwise wipe the icon. -->
+      <span data-locale="wikiLink">Open the Wiki</span>
+    </a>
+
     <div class="optionDiv">
         <div class="toggle-row">
           <h4 data-locale="translateToggle">Lyrics translation
@@ -50,74 +63,6 @@
             <span class="switch-label" data-locale="translationOn">On</span>
           </div>
         </div>
-    </div>
-
-    <div class="optionDiv">
-      <h4 data-locale="translationProvider">Translation Provider</h4>
-      <select name="translationProvider" id="translationProvider" class="selectOptions">
-        <option value="google" data-locale="providerGoogle">Google Translate</option>
-        <option value="dlx" data-locale="providerDlx">DLX</option>
-        <option value="customAI" data-locale="providerCustomAI">Custom AI (OpenAI-compatible)</option>
-      </select>
-
-      <div id="dlxSettings" style="display:none;">
-        <h4 class="subtitle" data-locale="dlxEndpoint">DLX Endpoint URL</h4>
-        <input type="text" id="dlxEndpoint" class="aiInput" placeholder="https://your-dlx-instance.example.com/translate">
-        <span class="aiHint" data-locale="dlxEndpointHint">Enter a DLX-compatible endpoint (self-hosted or a public instance). See the wiki for options.</span>
-
-        <h4 class="subtitle" data-locale="dlxTranslationMode">Translation Mode</h4>
-        <select id="dlxTranslationMode" class="selectOptions">
-          <option value="batch" data-locale="dlxModeBatch">Batch (one request per song)</option>
-          <option value="perline" data-locale="dlxModePerLine">Per line (one request per lyric line)</option>
-        </select>
-
-        <button id="dlxTestConnection" data-locale="dlxTestConnection">Test Connection</button>
-        <span id="dlxTestStatus"></span>
-      </div>
-
-      <div id="aiSettings" style="display:none;">
-        <h4 class="subtitle" data-locale="aiEndpoint">API Endpoint URL</h4>
-        <input type="text" id="aiEndpoint" class="aiInput" placeholder="https://api.openai.com/v1">
-        <span class="aiHint" data-locale="aiEndpointHint">/chat/completions will be appended to this URL</span>
-
-        <h4 class="subtitle" data-locale="aiApiKey">API Key</h4>
-        <input type="password" id="aiApiKey" class="aiInput" placeholder="sk-...">
-
-        <h4 class="subtitle" data-locale="aiModel">Model Name</h4>
-        <input type="text" id="aiModel" class="aiInput" placeholder="gpt-4o-mini">
-
-        <div class="toggle-row">
-          <h4 class="subtitle" data-locale="aiThinkMode">Thinking Mode</h4>
-          <div class="switch-group">
-            <span class="switch-label" data-locale="thinkModeOff">Off</span>
-            <label class="switch">
-              <input type="checkbox" id="aiThinkMode" checked>
-              <span class="slider round"></span>
-            </label>
-            <span class="switch-label" data-locale="thinkModeOn">On</span>
-          </div>
-        </div>
-
-        <div class="toggle-row">
-          <h4 class="subtitle" data-locale="aiFailover">Instant preview</h4>
-          <div class="switch-group">
-            <span class="switch-label" data-locale="failoverOff">Off</span>
-            <label class="switch">
-              <input type="checkbox" id="aiFailover" checked>
-              <span class="slider round"></span>
-            </label>
-            <span class="switch-label" data-locale="failoverOn">On</span>
-          </div>
-        </div>
-
-        <button id="aiTestConnection" data-locale="aiTestConnection">Test Connection</button>
-        <span id="aiTestStatus"></span>
-      </div>
-
-      <div class="cacheControls">
-        <button id="clearSongCache" data-locale="clearSongCache">Clear current song cache</button>
-        <button id="clearAllCache" class="danger" data-locale="clearAllCache">Clear all cache</button>
-      </div>
     </div>
 
     <div class="optionDiv">
@@ -260,6 +205,75 @@
     </select>
     <button id="applyLanguage" data-locale="applyLanguage">Apply language selection</button>
   </div>
+
+    <div class="optionDiv">
+      <h4 data-locale="translationProvider">Translation Provider</h4>
+      <select name="translationProvider" id="translationProvider" class="selectOptions">
+        <option value="google" data-locale="providerGoogle">Google Translate</option>
+        <option value="dlx" data-locale="providerDlx">DLX</option>
+        <option value="customAI" data-locale="providerCustomAI">Custom AI (OpenAI-compatible)</option>
+      </select>
+
+      <div id="dlxSettings" style="display:none;">
+        <h4 class="subtitle" data-locale="dlxEndpoint">DLX Endpoint URL</h4>
+        <input type="text" id="dlxEndpoint" class="aiInput" placeholder="https://your-dlx-instance.example.com/translate">
+        <span class="aiHint" data-locale="dlxEndpointHint">Enter a DLX-compatible endpoint (self-hosted or a public instance). See the wiki for options.</span>
+
+        <h4 class="subtitle" data-locale="dlxTranslationMode">Translation Mode</h4>
+        <select id="dlxTranslationMode" class="selectOptions">
+          <option value="batch" data-locale="dlxModeBatch">Batch (one request per song)</option>
+          <option value="perline" data-locale="dlxModePerLine">Per line (one request per lyric line)</option>
+        </select>
+
+        <button id="dlxTestConnection" data-locale="dlxTestConnection">Test Connection</button>
+        <span id="dlxTestStatus"></span>
+      </div>
+
+      <div id="aiSettings" style="display:none;">
+        <h4 class="subtitle" data-locale="aiEndpoint">API Endpoint URL</h4>
+        <input type="text" id="aiEndpoint" class="aiInput" placeholder="https://api.openai.com/v1">
+        <span class="aiHint" data-locale="aiEndpointHint">/chat/completions will be appended to this URL</span>
+
+        <h4 class="subtitle" data-locale="aiApiKey">API Key</h4>
+        <input type="password" id="aiApiKey" class="aiInput" placeholder="sk-...">
+
+        <h4 class="subtitle" data-locale="aiModel">Model Name</h4>
+        <input type="text" id="aiModel" class="aiInput" placeholder="gpt-4o-mini">
+
+        <div class="toggle-row">
+          <h4 class="subtitle" data-locale="aiThinkMode">Thinking Mode</h4>
+          <div class="switch-group">
+            <span class="switch-label" data-locale="thinkModeOff">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="aiThinkMode" checked>
+              <span class="slider round"></span>
+            </label>
+            <span class="switch-label" data-locale="thinkModeOn">On</span>
+          </div>
+        </div>
+
+        <div class="toggle-row">
+          <h4 class="subtitle" data-locale="aiFailover">Instant preview</h4>
+          <div class="switch-group">
+            <span class="switch-label" data-locale="failoverOff">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="aiFailover" checked>
+              <span class="slider round"></span>
+            </label>
+            <span class="switch-label" data-locale="failoverOn">On</span>
+          </div>
+        </div>
+
+        <button id="aiTestConnection" data-locale="aiTestConnection">Test Connection</button>
+        <span id="aiTestStatus"></span>
+      </div>
+
+      <div class="cacheControls">
+        <button id="clearSongCache" data-locale="clearSongCache">Clear current song cache</button>
+        <button id="clearAllCache" class="danger" data-locale="clearAllCache">Clear all cache</button>
+      </div>
+    </div>
+
   <!-- <span style="color:rgb(255, 230, 202); font-size:1em" data-locale="toggleTip">- 🎵 Toggle the translation button on the player control bar! </span> !-->
   <div class="optionDiv">
     <h4 data-locale="lyricsMode">Lyrics mode</h4>
@@ -303,16 +317,24 @@
   </div>
 
   <div class="optionDiv">
-    <h4 data-locale="reviewTitle">Review</h4>
-    <a href= "https://chromewebstore.google.com/detail/spotify-lyrics-translator/odglneiicjonedgaldglaalgagkhanmi/reviews">
-      <button data-locale="reviewLink">Please leave a review !</button>
-    </a>
-  </div>
-
-  <div class="optionDiv">
     <h4 data-locale="debugTitle">Debug</h4>
     <span class="aiHint" data-locale="clearStorageHint">Erases all saved settings: target language, lyrics mode &amp; font size, translation provider, and your AI endpoint, API key, model, and toggles. The extension resets to defaults.</span>
     <button id="clearStorage" class="danger" data-locale="clearStorage">Clear extension storage</button>
+  </div>
+
+  <!-- REVIEW LINK -->
+  <div class="optionDiv">
+    <h4 data-locale="feedbackTitle">Feedback</h4>
+    <a class="buttonLink"
+      href="https://chromewebstore.google.com/detail/spotify-lyrics-translator/odglneiicjonedgaldglaalgagkhanmi/reviews"
+      target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M0 0h24v24H0z" fill="none" />
+        <path fill="currentColor"
+          d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m-6.43 9.57L12 15l-1.57-3.43L7 10l3.43-1.57L12 5l1.57 3.43L17 10z" />
+      </svg>
+      <span data-locale="reviewLink">Please leave a review!</span>
+    </a>
   </div>
 
   </div>
