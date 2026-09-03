@@ -7,8 +7,6 @@ A Chrome and Mozilla extension that automatically translates lyrics displayed on
  
 [Translatify is available on Mozilla Firefox !](https://addons.mozilla.org/en-US/firefox/addon/translatify-for-spotify/)
 
-Note: After two years, [Spotify will finally integrate lyrics translations for all users!](https://newsroom.spotify.com/2026-02-04/lyric-translations-offline-previews/)
-
 ## Features
 
 - Real-time translation of lyrics displayed in the Spotify Web Player.
@@ -88,5 +86,16 @@ See the [Custom AI Provider (BYOK) guide](https://github.com/Slyfti/translatify/
 If you have any questions or need assistance:
 - Open an issue on the [issues page](https://github.com/slyfti/translatify/issues).
 - Join discussions in existing issues or Pull Requests.
+
+---
+
+## Recommended alternatives
+- For YouTube Music: [Better Lyrics](https://github.com/better-lyrics/better-lyrics)
+- For Spotify: [Moegi](https://github.com/sglkc/moegi)
+
+---
+
+## License
+This project is licensed under the [MIT License](LICENSE).
 
 ---
