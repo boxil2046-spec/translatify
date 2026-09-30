@@ -430,7 +430,23 @@ if (wrapper.classList.contains("modifedLyricsWrapper")) {
 // element so we can restore it later.
 function replaceLyric(translatedLine, lyricsWrapper) {
     if (!lyricsWrapper || translatedLine == null) return;
-    if (lyricsWrapper.classList.contains("modifedLyricsWrapper")) return;
+    // 如果已經標記為翻譯過
+if (lyricsWrapper.classList.contains("modifedLyricsWrapper")) {
+    const existingNewLyrics = lyricsWrapper.querySelector(".newLyrics");
+    if (existingNewLyrics) {
+        // 翻譯節點還在，只需要更新文字，不用重新建立
+        existingNewLyrics.innerText = translatedLine;
+        return;
+    } else {
+        // 翻譯節點不見了，清除舊標記準備重新注入
+        lyricsWrapper.classList.remove("modifedLyricsWrapper");
+        const original = lyricsWrapper.querySelector(".originalLyrics");
+        if (original) {
+            original.classList.remove("originalLyrics");
+            original.removeAttribute("original");
+        }
+    }
+}
 
     lyricsWrapper.classList.add("modifedLyricsWrapper");
     const lyrics = lyricsWrapper.firstChild;
