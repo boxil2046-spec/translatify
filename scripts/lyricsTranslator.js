@@ -350,7 +350,20 @@ async function setupMutationObserver(provider, mode, readProviders) {
         if (!translateButton || translateButton.getAttribute("aria-pressed") !== "true") return;
 
         const processWrapper = (wrapper) => {
-            if (wrapper.classList.contains("modifedLyricsWrapper")) return;
+            // 檢查是否已經翻譯過，且翻譯節點仍然存在
+if (wrapper.classList.contains("modifedLyricsWrapper")) {
+    if (wrapper.querySelector(".newLyrics")) {
+        return; // 翻譯節點完好，直接跳過
+    } else {
+        // 翻譯節點被 Spotify 的重新渲染洗掉了，清除標記以便重新注入
+        wrapper.classList.remove("modifedLyricsWrapper");
+        const original = wrapper.querySelector(".originalLyrics");
+        if (original) {
+            original.classList.remove("originalLyrics");
+            original.removeAttribute("original");
+        }
+    }
+}
 
             const lyricsText = wrapper.firstChild?.textContent;
             if (!lyricsText) return;
